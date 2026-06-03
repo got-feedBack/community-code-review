@@ -1,0 +1,28 @@
+name: Deploy OCR to Repositories
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_name:
+        description: |
+          Repository to target (leave empty for all repos in the org).
+          If not provided, the action will replicate to all accessible repositories.
+        required: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Replicate OCR workflow to repositories
+        uses: derberg/manage-files-in-multiple-repositories@v2
+        with:
+          github_token: ${{ secrets.PAT_WITH_REPO_SCOPE }}
+          patterns_to_include: workflows/ocr-review.yml
+          destination: .github/workflows
+          patterns_to_ignore: .github/workflows/deploy-ocr.yml,.github/workflows/build-volunteer.yml
+          commit_message: "Add automated code review workflow"
+          committer_username: web-flow
+          committer_email: noreply@github.com

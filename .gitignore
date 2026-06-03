@@ -1,0 +1,2 @@
+# Hide actual secrets
+.env

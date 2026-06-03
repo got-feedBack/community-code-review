@@ -1,0 +1,36 @@
+services:
+  coordinator:
+    build: ./coordinator
+    ports:
+      - "8080:8080"
+    environment:
+      COORDINATOR_SECRET: "${COORDINATOR_SECRET}"
+    restart: unless-stopped
+    networks:
+      - code-review-net
+
+  runner:
+    # Official self-hosted runner Docker image
+    # https://github.com/myoung34/docker-github-actions-runner
+    image: myoung34/github-runner:latest
+    environment:
+      ORG_NAME: "${GITHUB_ORG_NAME}"
+      ACCESS_TOKEN: "${GITHUB_PAT}"
+      RUNNER_NAME: "${RUNNER_NAME:-coordinator-runner}"
+      RUNNER_LABELS: "self-hosted,linux,x64"
+      RUNNER_GROUP: "default"
+      DISABLE_AUTO_UPDATE: "true"
+      # Runner needs to reach coordinator on the Docker network
+      COORDINATOR_URL: "http://coordinator:8080"
+    volumes:
+      # Runner needs Docker socket to run workflow containers
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    networks:
+      - code-review-net
+    depends_on:
+      - coordinator
+
+networks:
+  code-review-net:
+    driver: bridge
