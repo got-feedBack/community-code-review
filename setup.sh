@@ -158,7 +158,7 @@ if [ "$SMOKE_TEST" = "y" ] || [ "$SMOKE_TEST" = "Y" ]; then
     echo ""
     echo "🧪 Building volunteer image..."
     cd "$(dirname "$0")/volunteer"
-    docker build -t volunteer:latest .
+    docker build --no-cache -t volunteer:latest .
     cd - > /dev/null
 
     echo "🧪 Starting test volunteer..."
