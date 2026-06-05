@@ -22,6 +22,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COORDINATOR_PORT="${COORDINATOR_PORT:-18080}"   # use non-default port to avoid conflicts
 COORDINATOR_SECRET="${COORDINATOR_SECRET:-test-secret-$(openssl rand -hex 8)}"
 MOCK_MODE="${MOCK_MODE:-1}"
+STRICT_MODE="${STRICT_MODE:-1}"                 # fail on v2 metadata missing / mock marker missing
 VOLUNTEER_IMAGE="${VOLUNTEER_IMAGE:-volunteer:test}"
 POLL_INTERVAL=2
 POLL_MAX=60                                   # 2 min total timeout
@@ -158,7 +159,11 @@ fi
 # Check protocol version
 PROTO_VER=$(echo "${VOL_JSON}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('protocol_version','MISSING'))" 2>/dev/null || echo "MISSING")
 if [ "${PROTO_VER}" = "MISSING" ]; then
-    warn "protocol_version missing (v1 client — backward compat OK)"
+    if [ "${STRICT_MODE}" = "1" ]; then
+        fail "protocol_version missing — expected v2 client"
+    else
+        warn "protocol_version missing (v1 client — backward compat OK)"
+    fi
 else
     ok "protocol_version=${PROTO_VER}"
 fi
@@ -166,7 +171,11 @@ fi
 # Check model_state
 STATE=$(echo "${VOL_JSON}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('model_state','MISSING'))" 2>/dev/null || echo "MISSING")
 if [ "${STATE}" = "MISSING" ]; then
-    warn "model_state missing (v1 client — backward compat OK)"
+    if [ "${STRICT_MODE}" = "1" ]; then
+        fail "model_state missing — expected v2 client"
+    else
+        warn "model_state missing (v1 client — backward compat OK)"
+    fi
 else
     ok "model_state=${STATE}"
 fi
@@ -192,7 +201,7 @@ if [ "${MOCK_MODE}" = "1" ]; then
     if echo "${RESPONSE}" | grep -q "MOCK REVIEW"; then
         ok "Mock response received"
     else
-        warn "Expected mock response marker not found"
+        fail "Expected mock response marker 'MOCK REVIEW' not found"
     fi
 fi
 

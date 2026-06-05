@@ -116,7 +116,7 @@ After running the container, go to **Docker Desktop → Containers** tab and cli
 
 When a review comes in, you'll see a log message like:
 
-```
+```text
 📥 Received a code review request — running inference...
 ✅ Review complete — result sent back to coordinator
 ```
@@ -128,17 +128,17 @@ The volunteer **automatically detects** when your GPU is busy with other work an
 ### What you'll see in the logs
 
 **When you start a game or other GPU-heavy app:**
-```
+```text
 🎮 Looks like something else is using the GPU... I'll stop accepting work until things quiet down.
 ```
 
 **When a review is already in progress when your GPU gets busy:**
-```
+```text
 🎮 Looks like the GPU just got busy, but I'm in the middle of handling something. I'll finish that up, then stop accepting work until things quiet down. Should be ~60s. You might see the GPU stutter until then.
 ```
 
 **When your GPU is free again:**
-```
+```text
 ✅ GPU is quiet again — ready to accept review requests!
 ```
 

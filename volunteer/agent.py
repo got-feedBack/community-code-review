@@ -34,8 +34,17 @@ GPU_INFO = os.environ.get("GPU_INFO", "unknown")
 MODEL_FILE = os.environ.get("MODEL_FILE", "unknown")
 
 # GPU thresholds (match coordinator defaults)
-GPU_UTIL_THRESHOLD = int(os.environ.get("GPU_UTIL_THRESHOLD", "70"))
-GPU_MEM_THRESHOLD = int(os.environ.get("GPU_MEM_THRESHOLD", "85"))
+try:
+    GPU_UTIL_THRESHOLD = int(os.environ.get("GPU_UTIL_THRESHOLD", "70"))
+except (ValueError, TypeError):
+    logger.warning("Invalid GPU_UTIL_THRESHOLD, using default 70")
+    GPU_UTIL_THRESHOLD = 70
+
+try:
+    GPU_MEM_THRESHOLD = int(os.environ.get("GPU_MEM_THRESHOLD", "85"))
+except (ValueError, TypeError):
+    logger.warning("Invalid GPU_MEM_THRESHOLD, using default 85")
+    GPU_MEM_THRESHOLD = 85
 
 # Derive WebSocket URL from the coordinator URL
 WS_BASE = COORDINATOR_URL.replace("http://", "ws://").replace("https://", "wss://")
@@ -52,8 +61,9 @@ PROTOCOL_VERSION = 2
 # Shared state for GPU monitoring
 _gpu_stats = {"utilization": 0, "memory": 0}
 _active_requests = 0
-_current_state = "ready"
+_current_state = "unloaded"
 _state_lock = asyncio.Lock()
+_first_gpu_probe = True
 
 
 async def get_gpu_stats() -> dict:
@@ -90,12 +100,13 @@ async def get_gpu_stats() -> dict:
             # Parse rocm-smi output (simplified)
             lines = result.stdout.strip().split("\n")
             for line in lines:
-                if "GPU use" in line.lower():
+                line_lower = line.lower()
+                if "gpu use" in line_lower:
                     parts = line.split()
                     for i, p in enumerate(parts):
                         if "%" in p:
                             stats["utilization"] = int(float(p.replace("%", "")))
-                if "vram" in line.lower() and "%" in line:
+                if "vram" in line_lower and "%" in line:
                     parts = line.split()
                     for p in parts:
                         if "%" in p:
@@ -158,7 +169,7 @@ async def gpu_monitor_task(ws):
 async def _update_model_state(ws):
     """Update and broadcast model state based on GPU and request load.
     Must be called while holding _state_lock."""
-    global _current_state
+    global _current_state, _first_gpu_probe
     old_state = _current_state
 
     if _active_requests > 0:
@@ -166,7 +177,11 @@ async def _update_model_state(ws):
     elif _gpu_stats["utilization"] > GPU_UTIL_THRESHOLD or _gpu_stats["memory"] > GPU_MEM_THRESHOLD:
         new_state = "busy"
     else:
-        new_state = "ready"
+        # First successful GPU probe transitions from unloaded -> loading -> ready
+        if old_state == "unloaded":
+            new_state = "loading"
+        else:
+            new_state = "ready"
 
     if new_state != old_state:
         _current_state = new_state
@@ -175,6 +190,14 @@ async def _update_model_state(ws):
             "state": new_state,
         }))
         logger.info("📊 Model state: %s → %s", old_state, new_state)
+        # After broadcasting loading, immediately transition to ready
+        if new_state == "loading":
+            _current_state = "ready"
+            await ws.send(json.dumps({
+                "type": "model_state",
+                "state": "ready",
+            }))
+            logger.info("📊 Model state: loading → ready")
 
 
 async def _update_model_state_safe(ws):
@@ -198,6 +221,15 @@ async def connect_and_serve():
     import websockets
 
     logger.info("Connecting to coordinator at %s", WS_URL)
+
+    # Seed GPU state before sending init so we report accurately
+    global _gpu_stats
+    try:
+        _gpu_stats = await get_gpu_stats()
+        logger.info("Initial GPU stats: utilization=%d%%, memory=%d%%",
+                    _gpu_stats["utilization"], _gpu_stats["memory"])
+    except Exception as e:
+        logger.warning("Could not probe GPU before init: %s", e)
 
     async with websockets.connect(WS_URL, ping_interval=None) as ws:
         # ── Step 1: Send init message with GPU metadata ──────────────────

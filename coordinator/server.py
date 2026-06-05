@@ -32,14 +32,26 @@ from fastapi.responses import JSONResponse
 COORDINATOR_SECRET = os.environ.get("COORDINATOR_SECRET", "")
 COORDINATOR_PORT = int(os.environ.get("COORDINATOR_PORT", "8080"))
 STALE_VOLUNTEER_SECONDS = 90  # evict if no heartbeat for this long
-GPU_UTIL_THRESHOLD = int(os.environ.get("GPU_UTIL_THRESHOLD", "70"))
-GPU_MEM_THRESHOLD = int(os.environ.get("GPU_MEM_THRESHOLD", "85"))
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger("coordinator")
+
+try:
+    _gpu_util = int(os.environ.get("GPU_UTIL_THRESHOLD", "70"))
+    GPU_UTIL_THRESHOLD = max(0, min(100, _gpu_util))
+except (ValueError, TypeError):
+    logger.warning("Invalid GPU_UTIL_THRESHOLD, using default 70")
+    GPU_UTIL_THRESHOLD = 70
+
+try:
+    _gpu_mem = int(os.environ.get("GPU_MEM_THRESHOLD", "85"))
+    GPU_MEM_THRESHOLD = max(0, min(100, _gpu_mem))
+except (ValueError, TypeError):
+    logger.warning("Invalid GPU_MEM_THRESHOLD, using default 85")
+    GPU_MEM_THRESHOLD = 85
 
 app = FastAPI(title="CCR Coordinator")  # Community Code Review
 
@@ -105,12 +117,15 @@ async def _pick_volunteer() -> Optional[tuple[str, dict]]:
             max_p = v.get("max_parallel", 1)
             active = v.get("active_requests", 0)
 
-            # Skip loading and unloaded volunteers
-            if state in ("loading", "unloaded"):
+            # Skip loading volunteers; keep unloaded for fallback
+            if state == "loading":
                 continue
 
             # Skip GPU-busy volunteers (v2+ only; v1 clients bypass this)
             if v.get("protocol_version", 1) >= 2:
+                # Clamp and validate GPU metrics before using them
+                util = max(0, min(100, util))
+                mem = max(0, min(100, mem))
                 if util > GPU_UTIL_THRESHOLD or mem > GPU_MEM_THRESHOLD:
                     continue
 
@@ -216,20 +231,6 @@ async def websocket_endpoint(ws: WebSocket, volunteer_id: str):
             "Run: docker pull ghcr.io/slopsmith/volunteer:latest",
             volunteer_id, protocol_version
         )
-        # Send a notice back to the volunteer so it appears in their logs too
-        try:
-            await ws.send_json({
-                "type": "server_notice",
-                "level": "warning",
-                "message": (
-                    "Your volunteer image is outdated (protocol v1). "
-                    "Please update for GPU-aware scheduling and better performance. "
-                    "Run: docker pull ghcr.io/slopsmith/volunteer:latest "
-                    "then stop, remove, and re-run your container to use the new image."
-                ),
-            })
-        except Exception:
-            pass
     else:
         logger.info(
             "Volunteer connected via WebSocket: %s [%s] model=%s from %s pool=%d (protocol v%d)",

@@ -26,20 +26,34 @@ jobs:
 
       - name: Determine image tags
         id: tags
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          BACKEND: ${{ matrix.backend }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          BACKEND="${{ matrix.backend }}"
-          REPO="ghcr.io/${{ github.repository_owner }}/volunteer"
-          if [ "${{ github.event_name }}" = "release" ]; then
-            TAG="${{ github.event.release.tag_name }}"
+          REPO="ghcr.io/${REPO_OWNER}/volunteer"
+          if [ "${EVENT_NAME}" = "release" ]; then
+            TAG="${RELEASE_TAG}"
             echo "tags=${REPO}:${BACKEND},${REPO}:${BACKEND}-${TAG}" >> "$GITHUB_OUTPUT"
             if [ "$BACKEND" = "cuda" ]; then
               echo "latest_tag=${REPO}:latest,${REPO}:${TAG}" >> "$GITHUB_OUTPUT"
             fi
           else
-            BRANCH="${{ github.ref_name }}"
-            echo "tags=${REPO}:${BACKEND}-${BRANCH}" >> "$GITHUB_OUTPUT"
-            if [ "$BACKEND" = "cuda" ]; then
-              echo "latest_tag=${REPO}:${BRANCH}" >> "$GITHUB_OUTPUT"
+            # Sanitize branch name for use in Docker tags
+            SANITIZED_BRANCH=$(echo "${REF_NAME}" | sed 's/[^a-zA-Z0-9._-]/-/g')
+            if [ "${REF_NAME}" = "main" ]; then
+              # Preserve backward-compatible tags for main branch builds
+              echo "tags=${REPO}:${BACKEND},${REPO}:${BACKEND}-${SANITIZED_BRANCH}" >> "$GITHUB_OUTPUT"
+              if [ "$BACKEND" = "cuda" ]; then
+                echo "latest_tag=${REPO}:latest,${REPO}:${SANITIZED_BRANCH}" >> "$GITHUB_OUTPUT"
+              fi
+            else
+              echo "tags=${REPO}:${BACKEND}-${SANITIZED_BRANCH}" >> "$GITHUB_OUTPUT"
+              if [ "$BACKEND" = "cuda" ]; then
+                echo "latest_tag=${REPO}:${SANITIZED_BRANCH}" >> "$GITHUB_OUTPUT"
+              fi
             fi
           fi
 
@@ -63,9 +77,12 @@ jobs:
       # Tag the CUDA build as "latest" too (most common backend)
       - name: Tag cuda as latest
         if: matrix.backend == 'cuda' && steps.tags.outputs.latest_tag != ''
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+          LATEST_TAG: ${{ steps.tags.outputs.latest_tag }}
         run: |
-          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.latest_tag }}"
+          IFS=',' read -ra TAGS <<< "${LATEST_TAG}"
           for tag in "${TAGS[@]}"; do
-            docker tag ghcr.io/${{ github.repository_owner }}/volunteer:cuda "$tag"
+            docker tag "ghcr.io/${REPO_OWNER}/volunteer:cuda" "$tag"
             docker push "$tag"
           done
