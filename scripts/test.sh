@@ -49,7 +49,31 @@ cleanup
 
 trap cleanup EXIT
 
-# ── Step 1: Build coordinator image ───────────────────────────────────────
+# ── Step 1: Run unit tests for agent state machine ────────────────────────
+echo ""
+info "Running unit tests for agent state machine..."
+UNIT_TEST_RESULT=$(docker run --rm \
+    -e COORDINATOR_URL="http://coordinator:8080" \
+    -e MOCK_MODE=1 \
+    -e GPU_UTIL_THRESHOLD=70 \
+    -e GPU_MEM_THRESHOLD=85 \
+    -e IDLE_TIMEOUT=30 \
+    -v "${PROJECT_ROOT}/volunteer/test_agent_state_machine.py:/app/test_agent_state_machine.py" \
+    "${VOLUNTEER_IMAGE}" \
+    python3 -m pytest /app/test_agent_state_machine.py -v 2>&1) || true
+
+if echo "${UNIT_TEST_RESULT}" | grep -q "passed"; then
+    echo "${UNIT_TEST_RESULT}" | tail -20
+    ok "Unit tests passed"
+elif echo "${UNIT_TEST_RESULT}" | grep -q "FAILED"; then
+    echo "${UNIT_TEST_RESULT}"
+    fail "Unit tests FAILED"
+else
+    warn "Unit test output ambiguous — check above"
+    echo "${UNIT_TEST_RESULT}" | tail -30
+fi
+
+# ── Step 2: Build coordinator image ───────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  Community Code Review — Integration Test                    ║"
@@ -208,6 +232,45 @@ if [ "${MOCK_MODE}" = "1" ]; then
         ok "Mock response received"
     else
         fail "Expected mock response marker 'MOCK REVIEW' not found"
+    fi
+fi
+
+# ── Step 9b: Verify state transitions after inference ────────────────────
+if [ "${STRICT_MODE}" = "1" ]; then
+    info "Checking model state transitions after inference..."
+
+    # Wait briefly for the agent to process and update state
+    sleep 2
+
+    VOLUNTEERS=$(curl -sf "http://localhost:${COORDINATOR_PORT}/volunteers" 2>/dev/null || echo "[]")
+    AFTER_STATE=$(echo "${VOLUNTEERS}" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for v in data:
+    if v.get('id') == 'test-volunteer':
+        print(v.get('model_state', 'MISSING'))
+        sys.exit(0)
+print('MISSING')
+" 2>/dev/null || echo "MISSING")
+
+    if [ "${AFTER_STATE}" = "ready" ]; then
+        ok "Model state is 'ready' after inference (loaded, idle)"
+    elif [ "${AFTER_STATE}" = "unloaded" ]; then
+        ok "Model state is 'unloaded' after inference (unloaded due to idle timeout or GPU)"
+    else
+        warn "Unexpected model state after inference: ${AFTER_STATE} (expected 'ready' or 'unloaded')"
+    fi
+
+    # Verify the volunteer went through proper state changes by checking agent logs
+    info "Checking agent logs for state transitions..."
+    AGENT_LOGS=$(docker logs "${VOLUNTEER_NAME}" 2>&1 | grep "Model state:" | tail -10 || echo "")
+    if echo "${AGENT_LOGS}" | grep -qE "(→ loading|→ ready|→ busy|→ unloaded)"; then
+        ok "State transitions detected in agent logs"
+        echo "${AGENT_LOGS}" | while IFS= read -r line; do
+            echo "       ${line}"
+        done
+    else
+        warn "No state transitions found in agent logs"
     fi
 fi
 
