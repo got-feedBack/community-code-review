@@ -7,10 +7,17 @@ export MODEL_FILE="${MODEL_FILE:-Qwen3-30B-A3B-Q4_K_M.gguf}"
 MODEL_URL="${MODEL_URL:-}"
 LLAMA_PORT="${LLAMA_PORT:-8080}"
 LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-32768}"
-LLAMA_N_PARALLEL="${LLAMA_N_PARALLEL:-1}"
 LLAMA_TEMP="${LLAMA_TEMP:-0.7}"
 MODEL_PATH="/models/${MODEL_FILE}"
 LLAMA_N_GPU_LAYERS="${LLAMA_N_GPU_LAYERS:-}"
+
+# Track whether user explicitly set LLAMA_N_PARALLEL (skip auto-tune if so)
+_LLAMA_N_PARALLEL_WAS_SET=0
+[ -n "${LLAMA_N_PARALLEL:+x}" ] && _LLAMA_N_PARALLEL_WAS_SET=1
+LLAMA_N_PARALLEL="${LLAMA_N_PARALLEL:-1}"
+
+# Export these so agent.py can read them (agent manages llama-server lifecycle)
+export LLAMA_PORT LLAMA_CTX_SIZE LLAMA_N_PARALLEL LLAMA_TEMP MODEL_PATH
 
 check_vram() {
     local info=$(curl -sf "https://huggingface.co/api/models/${MODEL_REPO}" 2>/dev/null) || return 0
@@ -53,9 +60,10 @@ while true; do
     export GPU_INFO
     echo "  GPU: $GPU_INFO, Layers: $LLAMA_N_GPU_LAYERS"
     check_vram || true
+    export LLAMA_N_GPU_LAYERS
 
     if [ "${MOCK_MODE:-}" = "1" ]; then
-        echo "  MOCK MODE: skipping model load, starting dummy server..."
+        echo "  MOCK MODE: skipping model download, starting dummy server..."
         python3 -c "
 import http.server, socketserver, json, threading
 
@@ -110,23 +118,15 @@ time.sleep(999999)
             cp /app/MODEL_README.md /models/README.md
         fi
 
-        echo "  Starting llama-server..."
-        ngl_arg=""
-        [ -n "$LLAMA_N_GPU_LAYERS" ] && ngl_arg="-ngl $LLAMA_N_GPU_LAYERS"
-        /app/llama-server -m "$MODEL_PATH" --host 0.0.0.0 --port "$LLAMA_PORT" $ngl_arg -c "$LLAMA_CTX_SIZE" -np "$LLAMA_N_PARALLEL" --temp "$LLAMA_TEMP" --no-ui --no-warmup &
-        LLAMA_PID=$!
-        ok=0
-        for i in $(seq 1 600); do
-            if curl -sf "http://localhost:${LLAMA_PORT}/health" >/dev/null 2>&1; then ok=1; break; fi
-            sleep 1
-        done
-        if [ "$ok" -eq 0 ]; then echo "  Server failed, restarting..."; kill "$LLAMA_PID" 2>/dev/null || true; sleep 5; continue; fi
+        echo "  NOTE: llama-server will be started on demand by agent.py"
+        echo "        when inference requests arrive and stopped when GPU"
+        echo "        is busy or idle timeout is reached."
     fi
 
     echo "  Starting agent..."
     cd /app && python3 agent.py &
     AGENT_PID=$!
-    trap "kill $LLAMA_PID $AGENT_PID 2>/dev/null; exit 0" SIGTERM SIGINT
+    trap "kill \$AGENT_PID 2>/dev/null; exit 0" SIGTERM SIGINT
     echo "  Volunteer running"
     wait -n 2>/dev/null || wait
     echo "=== Process ended, restarting in 5s ==="
