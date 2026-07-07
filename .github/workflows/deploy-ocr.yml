@@ -21,15 +21,20 @@ jobs:
           REPO_NAME: ${{ github.event.inputs.repo_name }}
           ORG: ${{ github.repository_owner }}
         run: |
+          # Fetch the canonical propagate script from .github repo
+          gh api "repos/$ORG/.github/contents/scripts/propagate-files.sh" \
+            --jq .content | base64 -d > /tmp/propagate-files.sh
+          chmod +x /tmp/propagate-files.sh
+
           if [ -n "$REPO_NAME" ]; then
-            bash scripts/propagate-files.sh \
+            bash /tmp/propagate-files.sh \
               --source workflows/ocr-review.yml \
               --destination .github/workflows/ocr-review.yml \
               --repo "$REPO_NAME" \
               --exclude community-code-review \
               --message "Add automated code review workflow"
           else
-            bash scripts/propagate-files.sh \
+            bash /tmp/propagate-files.sh \
               --source workflows/ocr-review.yml \
               --destination .github/workflows/ocr-review.yml \
               --all \
